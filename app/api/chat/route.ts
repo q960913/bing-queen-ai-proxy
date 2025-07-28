@@ -132,6 +132,10 @@ export async function POST(request: NextRequest) {
                         currentContentParts.push(
                             createPartFromUri(file.uri, file.mimeType)
                         );
+                    } else {
+                        return NextResponse.json({
+                            error: `Invalid request: unsupported content type.`
+                        }, {status: 400});
                     }
                     break;
 
