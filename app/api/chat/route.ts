@@ -44,6 +44,7 @@ interface BackendRequestBody {
         data: string;
         // [修改] 让 mimeType 使用我们定义的类型
         mimeType?: SupportedMimeType;
+        size?: bigint;
     }[];
     history?: Content[]; // 可选的、符合 Gemini SDK 格式的多轮对话历史
     config?: GenerationConfig & { systemInstruction?: string }; // 可选的模型配置，并扩展支持 systemInstruction
@@ -106,39 +107,54 @@ export async function POST(request: NextRequest) {
                             error: `Invalid request: content of type '${content.type}' must have mimeType and data.`
                         }, {status: 400});
                     }
-                    const fileBuffer = await fetch(content.data)
-                        .then((response) => response.arrayBuffer());
+                    if (content.size != null && content.size < 20000) {
+                        const FileResp = await fetch(content.data)
+                            .then((response) => response.arrayBuffer());
 
-                    const fileBlob = new Blob([fileBuffer], {type: content.type as SupportedMimeType});
-
-                    const file = await ai.files.upload({
-                        file: fileBlob,
-                        config: {
-                            displayName: randomUUID(),
-                        },
-                    });
-                    if (file.name == null) {
-                        file.name = randomUUID();
-                    }
-                    // Wait for the file to be processed.
-                    let getFile = await ai.files.get({name: file.name});
-                    while (getFile.state === 'PROCESSING') {
-                        getFile = await ai.files.get({name: file.name});
-                        await new Promise((resolve) => {
-                            setTimeout(resolve, 5000);
-                        });
-                    }
-                    if (file.uri && file.mimeType) {
                         currentContentParts.push(
-                            createPartFromUri(file.uri, file.mimeType)
-                        );
-                    } else {
-                        return NextResponse.json({
-                            error: `Invalid request: unsupported content type.`
-                        }, {status: 400});
-                    }
-                    break;
+                            {
+                                inlineData: {
+                                    mimeType: content.type as SupportedMimeType,
+                                    data: Buffer.from(FileResp).toString("base64")
+                                }
+                            })
+                        ;
 
+                        break;
+                    } else {
+                        const fileBuffer = await fetch(content.data)
+                            .then((response) => response.arrayBuffer());
+
+                        const fileBlob = new Blob([fileBuffer], {type: content.type as SupportedMimeType});
+
+                        const file = await ai.files.upload({
+                            file: fileBlob,
+                            config: {
+                                displayName: randomUUID(),
+                            },
+                        });
+                        if (file.name == null) {
+                            file.name = randomUUID();
+                        }
+                        // Wait for the file to be processed.
+                        let getFile = await ai.files.get({name: file.name});
+                        while (getFile.state === 'PROCESSING') {
+                            getFile = await ai.files.get({name: file.name});
+                            await new Promise((resolve) => {
+                                setTimeout(resolve, 5000);
+                            });
+                        }
+                        if (file.uri && file.mimeType) {
+                            currentContentParts.push(
+                                createPartFromUri(file.uri, file.mimeType)
+                            );
+                        } else {
+                            return NextResponse.json({
+                                error: `Invalid request: unsupported content type.`
+                            }, {status: 400});
+                        }
+                        break;
+                    }
                 default:
                     // 如果传来了一个我们不认识的类型，返回错误
                     return NextResponse.json({
