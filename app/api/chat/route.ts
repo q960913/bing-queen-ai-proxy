@@ -1,19 +1,48 @@
 import {type NextRequest, NextResponse} from 'next/server';
 import {
     GoogleGenAI,
+    createUserContent,
+    createPartFromUri,
     type GenerationConfig,
     type Content,
     type Part,
 } from "@google/genai";
+
+// 在 route.ts 的顶部
+
+// [新增] 定义支持的多媒体 MIME 类型
+type SupportedMimeType =
+    | 'image/png'
+    | 'image/jpeg'
+    | 'image/webp'
+    | 'image/heic'
+    | 'image/heif'
+    | 'audio/wav'
+    | 'audio/mp3'
+    | 'audio/aiff'
+    | 'audio/aac'
+    | 'audio/ogg'
+    | 'audio/flac'
+    | 'video/mp4'
+    | 'video/mpeg'
+    | 'video/mov'
+    | 'video/avi'
+    | 'video/x-flv'
+    | 'video/3gpp'
+    | 'video/webm'
+    | 'video/wmv'
+    | 'application/pdf';
 
 /**
  * 定义从若依后端接收的请求体结构，确保类型安全。
  */
 interface BackendRequestBody {
     contents: {
-        type: 'text' | 'image_base64';
+        // [修改] 扩展 type 类型
+        type: 'text' | 'image' | 'audio' | 'video' | 'pdf';
         data: string;
-        mimeType?: string; // image_base64 时需要
+        // [修改] 让 mimeType 使用我们定义的类型
+        mimeType?: SupportedMimeType;
     }[];
     history?: Content[]; // 可选的、符合 Gemini SDK 格式的多轮对话历史
     config?: GenerationConfig & { systemInstruction?: string }; // 可选的模型配置，并扩展支持 systemInstruction
@@ -58,17 +87,50 @@ export async function POST(request: NextRequest) {
             ...body.config,
         };
 
-        // 将前端传来的 contents 数组，转换为 Gemini SDK 需要的 Part[] 格式
-        const currentContentParts: Part[] = body.contents.map(content => {
-            if (content.type === 'image_base64' && content.mimeType && content.data) {
-                return {inlineData: {mimeType: content.mimeType, data: content.data}};
-            }
-            return {text: content.data};
-        });
+        // [核心修改] 将后端传来的 contents 数组，转换为 Gemini SDK 需要的 Part[] 格式
+        const currentContentParts: Part[] = [];
+        for (const content of body.contents) {
+            switch (content.type) {
+                case 'text':
+                    currentContentParts.push({text: content.data});
+                    break;
 
-        // --- 5. 核心逻辑：根据是否存在 history，智能切换模式并获取流 ---
+                case 'image':
+                case 'audio':
+                case 'video':
+                case 'pdf':
+                    // [核心] 增加对 mimeType 和 data 的健壮性检查
+                    if (!content.mimeType || !content.data) {
+                        return NextResponse.json({
+                            error: `Invalid request: content of type '${content.type}' must have mimeType and data.`
+                        }, {status: 400});
+                    }
+                    currentContentParts.push(
+                        createPartFromUri(content.data, content.mimeType)
+                    );
+                    break;
+
+                default:
+                    // 如果传来了一个我们不认识的类型，返回错误
+                    return NextResponse.json({
+                        error: `Invalid request: unsupported content type.`
+                    }, {status: 400});
+            }
+        }
+
+// 如果处理完后，parts 数组是空的，说明有问题
+        if (currentContentParts.length === 0) {
+            return NextResponse.json({error: 'Invalid request: `contents` array resulted in no processable parts.'}, {status: 400});
+        }
+
+
+// --- 5. 核心逻辑：根据是否存在 history，智能切换模式并获取流 ---
         let resultStream;
-        if (body.history && body.history.length > 0) {
+
+// [核心修改] 多媒体内容通常用于单轮对话，如果请求中包含多媒体，我们强制走单轮模式
+        const hasMultimedia = body.contents.some(c => c.type !== 'text');
+
+        if (body.history && body.history.length > 0 && !hasMultimedia) {
 
             // **多轮对话模式**
             const chat = ai.chats.create({
@@ -85,12 +147,11 @@ export async function POST(request: NextRequest) {
         } else {
             // **单轮对话模式，用于多媒体**
             resultStream = await ai.models.generateContentStream({
-                model: modelName,
-                contents: [{ role: "user", parts: currentContentParts }], // <-- [修正] 把 parts 数组包在 content 对象里
-                config: generationConfig
+                model: "gemini-2.5-flash",
+                contents: createUserContent(
+                    currentContentParts
+                ),
             });
-
-
         }
 
         // --- 6. 将 Gemini 的响应流，实时转发给若依后端 ---
@@ -106,14 +167,14 @@ export async function POST(request: NextRequest) {
                 for await (const chunk of resultStream) {
                     const chunkText = chunk.text;
                     if (chunkText) {
-                        const sseChunk = `data: ${JSON.stringify({ text: chunkText })}\n\n`;
+                        const sseChunk = `data: ${JSON.stringify({text: chunkText})}\n\n`;
                         controller.enqueue(new TextEncoder().encode(sseChunk));
                     }
                 }
 
                 // [简化] 暂时不处理最后的 token 信息，以解决 .response 不存在的错误
                 // 等流式文本跑通后，再来研究如何从流中聚合最终响应
-                const finalEvent = { event: 'end', data: { finishReason: 'STOP' } };
+                const finalEvent = {event: 'end', data: {finishReason: 'STOP'}};
                 const finalChunk = `event: ${finalEvent.event}\ndata: ${JSON.stringify(finalEvent.data)}\n\n`;
                 controller.enqueue(new TextEncoder().encode(finalChunk));
 
