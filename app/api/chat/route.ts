@@ -128,9 +128,11 @@ export async function POST(request: NextRequest) {
                             setTimeout(resolve, 5000);
                         });
                     }
-                    currentContentParts.push(
-                        createPartFromUri(content.data, content.mimeType)
-                    );
+                    if (file.uri && file.mimeType) {
+                        currentContentParts.push(
+                            createPartFromUri(file.uri, file.mimeType)
+                        );
+                    }
                     break;
 
                 default:
