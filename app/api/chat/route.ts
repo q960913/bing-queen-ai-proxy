@@ -7,6 +7,7 @@ import {
     type Content,
     type Part,
 } from "@google/genai";
+import {randomUUID} from "node:crypto";
 
 // 在 route.ts 的顶部
 
@@ -105,6 +106,28 @@ export async function POST(request: NextRequest) {
                             error: `Invalid request: content of type '${content.type}' must have mimeType and data.`
                         }, {status: 400});
                     }
+                    const fileBuffer = await fetch(content.data)
+                        .then((response) => response.arrayBuffer());
+
+                    const fileBlob = new Blob([fileBuffer], {type: content.mimeType as SupportedMimeType});
+
+                    const file = await ai.files.upload({
+                        file: fileBlob,
+                        config: {
+                            displayName: randomUUID(),
+                        },
+                    });
+                    if (file.name == null) {
+                        file.name = randomUUID();
+                    }
+                    // Wait for the file to be processed.
+                    let getFile = await ai.files.get({name: file.name});
+                    while (getFile.state === 'PROCESSING') {
+                        getFile = await ai.files.get({name: file.name});
+                        await new Promise((resolve) => {
+                            setTimeout(resolve, 5000);
+                        });
+                    }
                     currentContentParts.push(
                         createPartFromUri(content.data, content.mimeType)
                     );
@@ -146,6 +169,7 @@ export async function POST(request: NextRequest) {
             });
         } else {
             // **单轮对话模式，用于多媒体**
+
             resultStream = await ai.models.generateContentStream({
                 model: "gemini-2.5-flash",
                 contents: createUserContent(
