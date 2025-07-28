@@ -114,7 +114,7 @@ export async function POST(request: NextRequest) {
                         currentContentParts.push(
                             {
                                 inlineData: {
-                                    mimeType: content.type as SupportedMimeType,
+                                    mimeType: content.mimeType as SupportedMimeType,
                                     data: Buffer.from(FileResp).toString("base64")
                                 }
                             })
@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
                         const fileBuffer = await fetch(content.data)
                             .then((response) => response.arrayBuffer());
 
-                        const fileBlob = new Blob([fileBuffer], {type: content.type as SupportedMimeType});
+                        const fileBlob = new Blob([fileBuffer], {type: content.mimeType as SupportedMimeType});
 
                         const file = await ai.files.upload({
                             file: fileBlob,
