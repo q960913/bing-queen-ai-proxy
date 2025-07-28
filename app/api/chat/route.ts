@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
                     const fileBuffer = await fetch(content.data)
                         .then((response) => response.arrayBuffer());
 
-                    const fileBlob = new Blob([fileBuffer], {type: content.mimeType as SupportedMimeType});
+                    const fileBlob = new Blob([fileBuffer], {type: content.type as SupportedMimeType});
 
                     const file = await ai.files.upload({
                         file: fileBlob,
